@@ -15,7 +15,7 @@ This app is designed to mimic Codesys-style logic and HMI for demo, training, or
 
 ## Demo Video
 
-[Watch the demo video on YouTube](https://www.loom.com/share/40add16fdfa045cd9c88898e695db3a0?sid=63ec46b4-d716-4fee-bcaa-685b27a332bc)
+[Watch the demo video on Loom](https://www.loom.com/share/40add16fdfa045cd9c88898e695db3a0?sid=63ec46b4-d716-4fee-bcaa-685b27a332bc)
 
 ## Screenshots
 
