@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PLC Simulation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(180deg, #e5e9f2 0%, #cfd8e3 100%);
+        }
+        .win-panel {
+            background: linear-gradient(180deg, #f8fafc 0%, #e5e9f2 100%);
+            border: 2px solid #b0b8c1;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px 0 #b0b8c133;
+            margin-bottom: 1.5rem;
+        }
+        .win-title {
+            color: #2563eb;
+            font-weight: 600;
+            font-size: 1.2rem;
+            border-bottom: 1px solid #b0b8c1;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .io-point {
+            transition: all 0.3s ease;
+            border-radius: 4px;
+            border: 1.5px solid #b0b8c1;
+            background: #f1f5fa;
+        }
+        .io-point.active {
+            background-color: #e0f2fe;
+            border-color: #2563eb;
+        }
+        .status-light {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 8px;
+            border: 1.5px solid #b0b8c1;
+            background: #b0b8c1;
+            box-shadow: 0 0 4px #b0b8c1;
+        }
+        .status-light.on {
+            background: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+            border-color: #15803d;
+        }
+        .status-light.off {
+            background: #b0b8c1;
+            box-shadow: 0 0 4px #b0b8c1;
+        }
+        .slider-win {
+            accent-color: #2563eb;
+        }
+        .chart-win {
+            background: #f8fafc;
+            border: 2px solid #b0b8c1;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px 0 #b0b8c133;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold mb-8 text-center text-blue-800 drop-shadow">PLC Simulation</h1>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- Inputs Section -->
+            <div class="win-panel p-6">
+                <div class="win-title">Inputs</div>
+                <div class="grid grid-cols-2 gap-4" id="inputs"></div>
+                <!-- Analog Input -->
+                <div class="mt-6">
+                    <label for="ai0" class="block font-semibold mb-2">Analog Input (AI0)
+                        <span id="ai0-warning" class="ml-2 hidden px-2 py-1 rounded bg-red-500 text-white text-xs">High!</span>
+                    </label>
+                    <input type="range" min="0" max="100" value="0" id="ai0" class="w-full slider-win" oninput="setAnalogInput('AI0', this.value)">
+                    <div class="flex justify-between text-xs text-gray-500"><span>0</span><span>100</span></div>
+                    <div id="ai0-value" class="mt-1 text-sm font-mono"></div>
+                </div>
+            </div>
+            <!-- Outputs Section -->
+            <div class="win-panel p-6">
+                <div class="win-title">Outputs</div>
+                <div class="grid grid-cols-2 gap-4" id="outputs"></div>
+                <!-- Analog Output -->
+                <div class="mt-6">
+                    <label class="block font-semibold mb-2">Analog Output (AO0)</label>
+                    <div class="w-full h-6 bg-gray-200 rounded overflow-hidden relative">
+                        <div id="ao0-bar" class="h-full bg-blue-500 transition-all duration-300"></div>
+                        <div id="ao0-value" class="absolute inset-0 flex items-center justify-center text-xs font-mono"></div>
+                    </div>
+                </div>
+            </div>
+            <!-- Timers Section -->
+            <div class="win-panel p-6">
+                <div class="win-title">Timers</div>
+                <div class="grid grid-cols-1 gap-4" id="timers"></div>
+            </div>
+            <!-- Counters Section -->
+            <div class="win-panel p-6">
+                <div class="win-title">Counters</div>
+                <div class="grid grid-cols-1 gap-4" id="counters"></div>
+            </div>
+        </div>
+        <!-- Live Chart -->
+        <div class="chart-win p-6 mt-8">
+            <h2 class="text-xl font-semibold mb-4 text-blue-800">Live Analog Chart</h2>
+            <canvas id="analogChart" height="80"></canvas>
+        </div>
+        <!-- Status Bar -->
+        <div class="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-4 border-t border-gray-300">
+            <div class="container mx-auto flex justify-between items-center">
+                <div class="text-sm text-gray-600">
+                    Scan Time: <span id="scan-time">0</span> ms
+                </div>
+                <div class="text-sm text-gray-600">
+                    Status: <span id="plc-status" class="font-semibold">Running</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const socket = io();
+        let status = {};
+        let chart;
+        let chartData = {
+            labels: [],
+            datasets: [
+                { label: 'AI0', data: [], borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true },
+                { label: 'AO0', data: [], borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true }
+            ]
+        };
+
+        function updateIO() {
+            // Update inputs
+            const inputsDiv = document.getElementById('inputs');
+            inputsDiv.innerHTML = '';
+            Object.entries(status.inputs || {}).forEach(([name, value]) => {
+                inputsDiv.innerHTML += `
+                    <div class="io-point p-4 cursor-pointer ${value ? 'active' : ''}"
+                         onmousedown="setInput('${name}', true)"
+                         onmouseup="setInput('${name}', false)"
+                         onmouseleave="setInput('${name}', false)">
+                        <div class="font-semibold">${name}</div>
+                        <div class="text-sm text-gray-600">${value ? 'ON' : 'OFF'}</div>
+                    </div>
+                `;
+            });
+            // Update outputs
+            const outputsDiv = document.getElementById('outputs');
+            outputsDiv.innerHTML = '';
+            Object.entries(status.outputs || {}).forEach(([name, value]) => {
+                outputsDiv.innerHTML += `
+                    <div class="io-point p-4 flex items-center ${value ? 'active' : ''}">
+                        <span class="status-light ${value ? 'on' : 'off'}"></span>
+                        <div>
+                            <div class="font-semibold">${name}</div>
+                            <div class="text-sm text-gray-600">${value ? 'ON' : 'OFF'}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            // Update timers
+            const timersDiv = document.getElementById('timers');
+            timersDiv.innerHTML = '';
+            Object.entries(status.timers || {}).forEach(([name, value]) => {
+                timersDiv.innerHTML += `
+                    <div class="p-4 border rounded-lg">
+                        <div class="font-semibold">${name}</div>
+                        <div class="text-sm text-gray-600">${value.toFixed(2)}s</div>
+                    </div>
+                `;
+            });
+            // Update counters
+            const countersDiv = document.getElementById('counters');
+            countersDiv.innerHTML = '';
+            Object.entries(status.counters || {}).forEach(([name, value]) => {
+                countersDiv.innerHTML += `
+                    <div class="p-4 border rounded-lg">
+                        <div class="font-semibold">${name}</div>
+                        <div class="text-sm text-gray-600">${value}</div>
+                    </div>
+                `;
+            });
+            // Update analog input
+            if (status.analog_inputs && status.analog_inputs.AI0 !== undefined) {
+                document.getElementById('ai0').value = status.analog_inputs.AI0;
+                document.getElementById('ai0-value').textContent = `Value: ${status.analog_inputs.AI0.toFixed(1)}`;
+                // Threshold warning
+                if (status.analog_inputs.AI0 > 75) {
+                    document.getElementById('ai0').classList.add('border-red-500');
+                    document.getElementById('ai0-warning').classList.remove('hidden');
+                } else {
+                    document.getElementById('ai0').classList.remove('border-red-500');
+                    document.getElementById('ai0-warning').classList.add('hidden');
+                }
+            }
+            // Update analog output
+            if (status.analog_outputs && status.analog_outputs.AO0 !== undefined) {
+                const ao0 = status.analog_outputs.AO0;
+                const bar = document.getElementById('ao0-bar');
+                bar.style.width = `${ao0}%`;
+                bar.style.backgroundColor = (status.analog_inputs.AI0 > 75) ? '#f59e42' : '#3b82f6';
+                document.getElementById('ao0-value').textContent = `${ao0.toFixed(1)}`;
+            }
+            // Update live chart
+            if (status.analog_inputs && status.analog_outputs) {
+                const now = new Date();
+                chartData.labels.push(now.toLocaleTimeString().split(' ')[0]);
+                chartData.datasets[0].data.push(status.analog_inputs.AI0);
+                chartData.datasets[1].data.push(status.analog_outputs.AO0);
+                if (chartData.labels.length > 30) {
+                    chartData.labels.shift();
+                    chartData.datasets[0].data.shift();
+                    chartData.datasets[1].data.shift();
+                }
+                chart.update();
+            }
+
+            // Update status bar
+            document.getElementById('scan-time').textContent = (status.scan_time * 1000).toFixed(2);
+            document.getElementById('plc-status').textContent = status.running ? 'Running' : 'Stopped';
+
+            // Animate outputs
+            Object.entries(status.outputs || {}).forEach(([name, value]) => {
+                const el = Array.from(document.querySelectorAll('#outputs .io-point')).find(e => e.querySelector('.font-semibold').textContent === name);
+                if (el) {
+                    if (value) {
+                        el.classList.add('ring', 'ring-green-400', 'animate-pulse');
+                    } else {
+                        el.classList.remove('ring', 'ring-green-400', 'animate-pulse');
+                    }
+                }
+            });
+            // Animate counter
+            Object.entries(status.counters || {}).forEach(([name, value]) => {
+                const el = Array.from(document.querySelectorAll('#counters .p-4')).find(e => e.querySelector('.font-semibold').textContent === name);
+                if (el) {
+                    if (!el.dataset.lastValue) el.dataset.lastValue = value;
+                    if (parseInt(el.dataset.lastValue) !== value) {
+                        el.classList.add('bg-yellow-200');
+                        setTimeout(() => el.classList.remove('bg-yellow-200'), 300);
+                        el.dataset.lastValue = value;
+                    }
+                }
+            });
+        }
+
+        async function setInput(name, value) {
+            await fetch(`/api/io/input/${name}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ value }),
+            });
+        }
+
+        async function setAnalogInput(name, value) {
+            await fetch(`/api/analog_input/${name}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ value }),
+            });
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('analogChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    animation: false,
+                    responsive: true,
+                    scales: { y: { min: 0, max: 100 } }
+                }
+            });
+        }
+
+        socket.on('status_update', (newStatus) => {
+            status = newStatus;
+            updateIO();
+        });
+
+        window.onload = initChart;
+    </script>
+</body>
+</html> 
