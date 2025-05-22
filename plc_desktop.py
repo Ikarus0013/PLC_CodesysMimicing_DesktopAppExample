@@ -1,9 +1,9 @@
 import sys
 import time
-from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSlider, QProgressBar, QFrame, QListWidget, QCheckBox, QButtonGroup, QRadioButton)
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSlider, QProgressBar, QFrame, QListWidget, QCheckBox, QButtonGroup, QRadioButton, QMessageBox)
 from PySide6.QtCore import Qt, QTimer
 import pyqtgraph as pg
-from PySide6.QtGui import QPainter, QColor
+from PySide6.QtGui import QPainter, QColor, QFont, QLinearGradient
 
 class PLCState:
     def __init__(self):
@@ -37,7 +37,10 @@ class PLCState:
             self.tank_level = max(0.0, min(100.0, self.tank_level))
             self.valve_opening = 100.0
         else:
-            self.tank_level = self.manual_level
+            # Only allow tank level to change if valve is open
+            if self.manual_valve:
+                self.tank_level = self.manual_level
+            # If valve is closed, keep tank level constant
             self.valve_opening = 100.0 if self.manual_valve else 0.0
         # High/Low level sensors auto-update
         self.high_level = self.tank_level >= 95
@@ -83,39 +86,78 @@ class TankWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         w, h = self.width(), self.height()
+        margin = 40
+        tank_width = w // 2
+        tank_height = h // 3
+        tank_left = (w - tank_width) // 2
+        tank_top = margin + 40
         # Draw tank outline
         painter.setPen(QColor('#2563eb'))
         painter.setBrush(QColor('#e0e7ef'))
-        painter.drawRect(w//3, h//8, w//3, h*3//4)
-        # Draw water level
+        painter.drawRect(tank_left, tank_top, tank_width, tank_height)
+        # Draw water level with gradient
         level = self.plc_state.tank_level / 100.0
-        water_h = int(h*3//4 * level)
-        painter.setBrush(QColor('#38bdf8'))
-        painter.drawRect(w//3+2, h//8 + h*3//4 - water_h, w//3-4, water_h)
-        # Draw pump
-        pump_color = QColor('#22c55e') if self.plc_state.pump_running else QColor('#b0b8c1')
-        painter.setBrush(pump_color)
-        painter.drawEllipse(w//3-40, h*3//4+10, 30, 30)
-        painter.drawText(w//3-60, h*3//4+30, "Pump")
-        # Draw valve
-        valve_color = QColor('#22c55e') if self.plc_state.valve_opening > 0 else QColor('#b0b8c1')
-        painter.setBrush(valve_color)
-        painter.drawEllipse(w*2//3+10, h*3//4+10, 30, 30)
-        painter.drawText(w*2//3+45, h*3//4+30, "Valve")
-        # Draw alarm
+        water_h = int(tank_height * level)
+        if water_h > 0:
+            gradient = QLinearGradient(tank_left, tank_top + tank_height, tank_left, tank_top + tank_height - water_h)
+            gradient.setColorAt(0, QColor('#38bdf8'))
+            gradient.setColorAt(1, QColor('#0ea5e9'))
+            painter.setBrush(gradient)
+        else:
+            painter.setBrush(QColor('#38bdf8'))
+        painter.drawRect(tank_left+2, tank_top + tank_height - water_h, tank_width-4, water_h)
+        # Draw tank level number (large, bold, outlined, always readable)
+        percent_text = f"{self.plc_state.tank_level:.1f}%"
+        font = painter.font()
+        font.setPointSize(32)
+        font.setBold(True)
+        painter.setFont(font)
+        for dx, dy in [(-2,0),(2,0),(0,-2),(0,2)]:
+            painter.setPen(QColor('white'))
+            painter.drawText(tank_left, tank_top + tank_height//2 + dy, tank_width, 50, Qt.AlignCenter, percent_text)
+        painter.setPen(QColor('black'))
+        painter.drawText(tank_left, tank_top + tank_height//2, tank_width, 50, Qt.AlignCenter, percent_text)
+        # Draw alarm (top center above tank)
         if self.plc_state.alarm:
             painter.setBrush(QColor('#ef4444'))
-            painter.drawEllipse(w//2-10, h//8-30, 20, 20)
-            painter.drawText(w//2-30, h//8-35, "ALARM!")
-        # Draw sensors
+            painter.setPen(QColor('#991b1b'))
+            painter.drawEllipse(tank_left + tank_width//2 - 18, tank_top - 50, 36, 36)
+            painter.setFont(QFont('Arial', 14, QFont.Bold))
+            painter.drawText(tank_left + tank_width//2 - 60, tank_top - 60, 120, 20, Qt.AlignCenter, "ALARM!")
+        # Draw sensors (left of tank, vertically aligned)
+        label_font = QFont('Arial', 10)
+        painter.setFont(label_font)
+        sensor_circle_d = 28
+        sensor_x = tank_left - 60
+        sensor_y_high = tank_top
+        sensor_y_low = tank_top + tank_height - sensor_circle_d
+        label_padding = 16
         # High Level
         painter.setBrush(QColor('#22c55e') if self.plc_state.high_level else QColor('#b0b8c1'))
-        painter.drawEllipse(w//3-40, h//8-10, 18, 18)
-        painter.drawText(w//3-70, h//8+5, "High Sensor")
+        painter.setPen(QColor('black'))
+        painter.drawEllipse(sensor_x, sensor_y_high, sensor_circle_d, sensor_circle_d)
+        painter.drawText(sensor_x + sensor_circle_d + label_padding, sensor_y_high + sensor_circle_d//2 + 5, "High Sensor")
         # Low Level
         painter.setBrush(QColor('#22c55e') if self.plc_state.low_level else QColor('#b0b8c1'))
-        painter.drawEllipse(w//3-40, h//8+h*3//4-10, 18, 18)
-        painter.drawText(w//3-70, h//8+h*3//4+5, "Low Sensor")
+        painter.drawEllipse(sensor_x, sensor_y_low, sensor_circle_d, sensor_circle_d)
+        painter.drawText(sensor_x + sensor_circle_d + label_padding, sensor_y_low + sensor_circle_d//2 + 5, "Low Sensor")
+        # Draw pump (below tank, left)
+        pump_x = tank_left + 30
+        pump_y = tank_top + tank_height + 40
+        pump_color = QColor('#22c55e') if self.plc_state.pump_running else QColor('#b0b8c1')
+        painter.setBrush(pump_color)
+        painter.setPen(QColor('black'))
+        painter.drawEllipse(pump_x, pump_y, 36, 36)
+        painter.setFont(QFont('Arial', 12, QFont.Bold))
+        painter.drawText(pump_x - 10, pump_y + 55, 60, 20, Qt.AlignCenter, "Pump")
+        # Draw valve (below tank, right)
+        valve_x = tank_left + tank_width - 66
+        valve_y = tank_top + tank_height + 40
+        valve_color = QColor('#22c55e') if self.plc_state.valve_opening > 0 else QColor('#b0b8c1')
+        painter.setBrush(valve_color)
+        painter.setPen(QColor('black'))
+        painter.drawEllipse(valve_x, valve_y, 36, 36)
+        painter.drawText(valve_x - 10, valve_y + 55, 60, 20, Qt.AlignCenter, "Valve")
 
 class PLCApp(QWidget):
     def __init__(self):
@@ -127,6 +169,7 @@ class PLCApp(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plc)
         self.timer.start(50)  # 50 ms scan
+        self.tank_empty_popup_shown = False
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -255,6 +298,17 @@ class PLCApp(QWidget):
         if not self.state.auto_mode:
             self.slider_level.setValue(int(self.state.manual_level))
             self.btn_valve.setText("Open Valve" if self.state.manual_valve else "Close Valve")
+        # Show popup if tank is empty in auto mode
+        if self.state.auto_mode and self.state.tank_level == 0.0 and not self.tank_empty_popup_shown:
+            self.tank_empty_popup_shown = True
+            msg = QMessageBox(self)
+            msg.setWindowTitle("ALARM")
+            msg.setText("<span style='font-size:36pt; color:red; font-weight:bold;'>ALARM: Tank is EMPTY!</span>")
+            msg.setIcon(QMessageBox.Critical)
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec()
+        if self.state.tank_level > 0.0:
+            self.tank_empty_popup_shown = False
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
